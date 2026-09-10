@@ -2,8 +2,6 @@ name: Continuous Delivery
 
 on:
   push:
-    branches:
-      - main
     tags:
       - "v*.*.*"
 
@@ -11,15 +9,13 @@ permissions:
   contents: read
   packages: write
 
-
 jobs:
 
   test:
     runs-on: ubuntu-latest
 
     steps:
-
-      - name: Checkout
+      - name: Checkout Repository
         uses: actions/checkout@v4
 
       - name: Setup Python
@@ -27,11 +23,11 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install dependencies
+      - name: Install Dependencies
         run: pip install -r requirements.txt
 
-      - name: Test
-        run: python -m pytest
+      - name: Run Tests
+        run: pytest
 
 
   build:
@@ -42,32 +38,32 @@ jobs:
       version: ${{ steps.version.outputs.version }}
 
     steps:
-
-      - name: Checkout
+      - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Get version
+      - name: Extract Version
         id: version
         shell: bash
         run: |
           VERSION=${GITHUB_REF_NAME#v}
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Building version $VERSION"
 
-      - name: Login GHCR
+      - name: Login to GHCR
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build
+      - name: Build Docker Image
         run: |
           docker build \
-          -t ghcr.io/${{ github.repository }}:${{ steps.version.outputs.version }} \
-          -t ghcr.io/${{ github.repository }}:latest \
-          .
+            -t ghcr.io/${{ github.repository }}:${{ steps.version.outputs.version }} \
+            -t ghcr.io/${{ github.repository }}:latest \
+            .
 
-      - name: Push
+      - name: Push Docker Images
         run: |
           docker push ghcr.io/${{ github.repository }}:${{ steps.version.outputs.version }}
           docker push ghcr.io/${{ github.repository }}:latest
@@ -81,31 +77,34 @@ jobs:
       name: staging
 
     steps:
-
-      - name: Deploy staging
-        uses: appleboy/ssh-action@v1
-
+      - name: Login to GHCR
+        uses: docker/login-action@v3
         with:
-          host: ${{ secrets.STAGING_HOST }}
-          username: ${{ secrets.STAGING_USER }}
-          key: ${{ secrets.STAGING_SSH_KEY }}
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-          script: |
-            docker pull ghcr.io/${{ github.repository }}:${{ needs.build.outputs.version }}
-
-            docker stop mlops-api || true
-            docker rm mlops-api || true
-
-            docker run -d \
-              --name mlops-api \
-              --restart unless-stopped \
-              -p 5000:5000 \
-              ghcr.io/${{ github.repository }}:${{ needs.build.outputs.version }}
-
-      - name: Smoke test
+      - name: Pull Versioned Image
         run: |
-          sleep 5
-          curl --fail http://${{ secrets.STAGING_HOST }}:5000/health
+          docker pull ghcr.io/${{ github.repository }}:${{ needs.build.outputs.version }}
+
+      - name: Deploy Staging
+        run: |
+          docker run -d \
+            --name mlops-api-staging \
+            -p 5000:5000 \
+            ghcr.io/${{ github.repository }}:${{ needs.build.outputs.version }}
+
+      - name: Wait for Application
+        run: sleep 5
+
+      - name: Staging Health Check
+        run: |
+          curl --fail http://localhost:5000/health
+
+      - name: Display Staging Container
+        run: |
+          docker ps
 
 
   deploy-production:
@@ -119,23 +118,31 @@ jobs:
       name: production
 
     steps:
-
-      - name: Deploy production
-        uses: appleboy/ssh-action@v1
-
+      - name: Login to GHCR
+        uses: docker/login-action@v3
         with:
-          host: ${{ secrets.PRODUCTION_HOST }}
-          username: ${{ secrets.PRODUCTION_USER }}
-          key: ${{ secrets.PRODUCTION_SSH_KEY }}
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-          script: |
-            docker pull ghcr.io/${{ github.repository }}:${{ needs.build.outputs.version }}
+      - name: Pull Same Versioned Image
+        run: |
+          docker pull ghcr.io/${{ github.repository }}:${{ needs.build.outputs.version }}
 
-            docker stop mlops-api || true
-            docker rm mlops-api || true
+      - name: Deploy Production
+        run: |
+          docker run -d \
+            --name mlops-api-production \
+            -p 5000:5000 \
+            ghcr.io/${{ github.repository }}:${{ needs.build.outputs.version }}
 
-            docker run -d \
-              --name mlops-api \
-              --restart unless-stopped \
-              -p 5000:5000 \
-              ghcr.io/${{ github.repository }}:${{ needs.build.outputs.version }}
+      - name: Wait for Application
+        run: sleep 5
+
+      - name: Production Health Check
+        run: |
+          curl --fail http://localhost:5000/health
+
+      - name: Display Production Container
+        run: |
+          docker ps
