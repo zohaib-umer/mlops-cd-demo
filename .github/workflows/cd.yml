@@ -28,6 +28,10 @@ jobs:
 
       - name: Run Tests
         run: python -m pytest
+<<<<<<< HEAD
+=======
+
+>>>>>>> 2cd4c9479d488eba436e44fc7bb63b9c81e32e8d
 
   build:
     needs: test
